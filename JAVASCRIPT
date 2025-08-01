@@ -1,0 +1,817 @@
+// Constantes do jogo
+const CARD_VALUES = ["4", "5", "6", "7", "Q", "J", "K", "A", "2", "3"]
+const SUITS = ["copas", "espadas", "ouros", "paus"]
+const SUIT_SYMBOLS = {
+  copas: "♥️",
+  espadas: "♠️",
+  ouros: "♦️",
+  paus: "♣️",
+}
+
+const CARD_POWER = {
+  4: 1,
+  5: 2,
+  6: 3,
+  7: 4,
+  Q: 5,
+  J: 6,
+  K: 7,
+  A: 8,
+  2: 9,
+  3: 10,
+}
+
+const MANILHA_ORDER = ["paus", "copas", "espadas", "ouros"] // Ordem de força das manilhas
+
+// Estado do jogo
+const gameState = {
+  phase: "menu", // menu, playing, end
+  mode: "1v1", // 1v1, 2v2
+  difficulty: "amador", // iniciante, amador, dificil
+  players: [], // Array de objetos Player
+  currentPlayerIndex: 0, // Índice do jogador atual no array players
+  playedCards: [], // Cartas jogadas na rodada atual
+  roundWins: { team1: 0, team2: 0 }, // Vitórias na mão atual (melhor de 3)
+  gameScore: { team1: 0, team2: 0 }, // Pontuação total do jogo
+  vira: null, // Carta vira
+  manilhaValue: null, // Valor da manilha (ex: "Q")
+  trucoState: {
+    called: false, // Se o truco foi chamado
+    callerId: null, // ID de quem chamou o truco
+    value: 1, // Valor atual do truco (1, 3, 6, 9, 12)
+    waitingResponse: false, // Se está aguardando resposta ao truco
+  },
+  roundNumber: 1, // Número da rodada dentro da mão (1, 2, 3)
+  gameMessage: "", // Mensagem exibida no jogo
+  handStartPlayerIndex: 0, // Índice do jogador que começa a mão
+  roundStartPlayerIndex: 0, // Índice do jogador que começa a rodada
+  isMaoDeFerro: false, // Se a mão de ferro está ativa
+}
+
+// Elementos DOM
+const menuScreen = document.getElementById("menu-screen")
+const gameScreen = document.getElementById("game-screen")
+const endScreen = document.getElementById("end-screen")
+
+const team1NameEl = document.getElementById("team1-name")
+const team2NameEl = document.getElementById("team2-name")
+const team1ScoreEl = document.getElementById("team1-score")
+const team2ScoreEl = document.getElementById("team2-score")
+const pontosJogoEl = document.getElementById("pontos-jogo")
+const viraCardEl = document.getElementById("vira-card")
+const manilhaNomeEl = document.getElementById("manilha-nome")
+const aiCardsContainer = document.getElementById("ai-cards")
+const playerCardsContainer = document.getElementById("player-cards")
+const playedCardsContainer = document.getElementById("played-cards")
+const gameMessageEl = document.getElementById("game-message")
+const trucoBtn = document.getElementById("truco-btn")
+const turnIndicatorEl = document.getElementById("turn-indicator")
+
+const trucoOverlay = document.getElementById("truco-overlay")
+const trucoTitleEl = document.getElementById("truco-titulo")
+const trucoInfoEl = document.getElementById("truco-info")
+
+const resultOverlay = document.getElementById("result-overlay")
+const resultTitleEl = document.getElementById("result-title")
+const resultInfoEl = document.getElementById("result-info")
+
+const endMessageEl = document.getElementById("end-message")
+const finalScoreEl = document.getElementById("final-score")
+
+const aiSection1v1 = document.getElementById("ai-section-1v1")
+const players2v2Section = document.getElementById("players-2v2")
+const partnerCardsContainer = document.getElementById("partner-cards")
+const ai1CardsContainer = document.getElementById("ai1-cards")
+const ai2CardsContainer = document.getElementById("ai2-cards")
+
+// Elementos de Áudio
+const cardPlaySound = document.getElementById("card-play-sound")
+const trucoSound = document.getElementById("truco-sound")
+const winSound = document.getElementById("win-sound")
+const loseSound = document.getElementById("lose-sound")
+
+// Inicialização
+document.addEventListener("DOMContentLoaded", () => {
+  initializeMenu()
+  initializeGameControls()
+})
+
+function initializeMenu() {
+  document.querySelectorAll(".mode-btn").forEach((btn) => {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll(".mode-btn").forEach((b) => b.classList.remove("active"))
+      this.classList.add("active")
+      gameState.mode = this.dataset.mode
+    })
+  })
+
+  document.querySelectorAll(".difficulty-btn").forEach((btn) => {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll(".difficulty-btn").forEach((b) => b.classList.remove("active"))
+      this.classList.add("active")
+      gameState.difficulty = this.dataset.difficulty
+    })
+  })
+
+  document.getElementById("start-game").addEventListener("click", startNewGame)
+  document.getElementById("new-game").addEventListener("click", () => {
+    gameState.gameScore = { team1: 0, team2: 0 }
+    showScreen("menu")
+  })
+}
+
+function initializeGameControls() {
+  trucoBtn.addEventListener("click", () => callTruco("player1"))
+}
+
+function showScreen(screen) {
+  document.querySelectorAll(".screen").forEach((s) => s.classList.remove("active"))
+  document.getElementById(screen + "-screen").classList.add("active")
+  gameState.phase = screen
+}
+
+// Funções do baralho
+function createDeck() {
+  const deck = []
+  for (const suit of SUITS) {
+    for (const value of CARD_VALUES) {
+      deck.push({
+        suit,
+        value,
+        id: `${suit}-${value}`,
+        isManilha: false,
+        power: CARD_POWER[value],
+      })
+    }
+  }
+  return deck
+}
+
+function shuffleDeck(deck) {
+  const shuffled = [...deck]
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+  }
+  return shuffled
+}
+
+function setManilhas(deck, viraCard) {
+  const viraValue = viraCard.value
+  const nextValueIndex = (CARD_VALUES.indexOf(viraValue) + 1) % CARD_VALUES.length
+  gameState.manilhaValue = CARD_VALUES[nextValueIndex]
+
+  return deck.map((card) => {
+    if (card.value === gameState.manilhaValue) {
+      const manilhaPower = 11 + MANILHA_ORDER.indexOf(card.suit)
+      return {
+        ...card,
+        isManilha: true,
+        power: manilhaPower,
+      }
+    }
+    return card
+  })
+}
+
+// Funções do jogo
+function startNewGame() {
+  gameState.gameScore = { team1: 0, team2: 0 } // Resetar placar do jogo
+  gameState.gameMessage = "Novo jogo iniciado!"
+  gameState.isMaoDeFerro = false // Resetar mão de ferro
+
+  showScreen("game")
+  startNewHand()
+}
+
+function startNewHand() {
+  // Verificar Mão de Ferro
+  if (gameState.gameScore.team1 === 11 && gameState.gameScore.team2 === 11) {
+    gameState.isMaoDeFerro = true
+    gameState.gameMessage = "MÃO DE FERRO! Todas as cartas reveladas. Não há truco."
+  } else {
+    gameState.isMaoDeFerro = false
+  }
+
+  const deck = shuffleDeck(createDeck())
+  const viraCard = deck[0]
+  const deckWithManilhas = setManilhas(deck.slice(1), viraCard)
+
+  gameState.players = []
+  if (gameState.mode === "1v1") {
+    gameState.players = [
+      { id: "player1", name: "Você", cards: [], isAI: false, team: 1 },
+      { id: "ai1", name: `Máquina (${gameState.difficulty})`, cards: [], isAI: true, team: 2 },
+    ]
+  } else {
+    gameState.players = [
+      { id: "player1", name: "Você", cards: [], isAI: false, team: 1 },
+      { id: "ai1", name: "IA 1", cards: [], isAI: true, team: 2 },
+      { id: "partner", name: "Parceiro", cards: [], isAI: true, team: 1 },
+      { id: "ai2", name: "IA 2", cards: [], isAI: true, team: 2 },
+    ]
+  }
+
+  // Distribuir 3 cartas para cada jogador
+  gameState.players.forEach((player, index) => {
+    const startIndex = index * 3
+    player.cards = deckWithManilhas.slice(startIndex, startIndex + 3)
+  })
+
+  gameState.vira = viraCard
+  gameState.playedCards = []
+  gameState.roundWins = { team1: 0, team2: 0 }
+  gameState.roundNumber = 1
+  gameState.trucoState = { called: false, callerId: null, value: 1, waitingResponse: false } // Resetar truco
+  gameState.currentPlayerIndex = gameState.handStartPlayerIndex
+  gameState.roundStartPlayerIndex = gameState.handStartPlayerIndex // Quem começa a rodada é quem começou a mão
+
+  // Alternar quem começa a próxima mão
+  gameState.handStartPlayerIndex = (gameState.handStartPlayerIndex + 1) % gameState.players.length
+
+  updateGameDisplay()
+
+  // Se o primeiro jogador da mão for IA, ela joga
+  if (gameState.players[gameState.currentPlayerIndex].isAI) {
+    setTimeout(aiPlayCard, 1500)
+  }
+}
+
+function updateGameDisplay() {
+  // Atualizar placar e nomes dos times
+  if (gameState.mode === "1v1") {
+    team1NameEl.textContent = "Você"
+    team2NameEl.textContent = "Máquina"
+    aiSection1v1.classList.remove("hidden")
+    players2v2Section.classList.add("hidden")
+  } else {
+    team1NameEl.textContent = "Seu Time"
+    team2NameEl.textContent = "Time da Máquina"
+    aiSection1v1.classList.add("hidden")
+    players2v2Section.classList.remove("hidden")
+  }
+  team1ScoreEl.textContent = gameState.gameScore.team1
+  team2ScoreEl.textContent = gameState.gameScore.team2
+  pontosJogoEl.textContent = gameState.trucoState.value
+
+  // Atualizar vira
+  renderCard(gameState.vira, viraCardEl, false)
+  manilhaNomeEl.textContent = gameState.manilhaValue
+
+  // Atualizar cartas dos jogadores
+  updatePlayerHandsDisplay()
+
+  // Atualizar cartas jogadas na mesa
+  updatePlayedCardsDisplay()
+
+  // Atualizar mensagem do jogo
+  gameMessageEl.textContent = gameState.gameMessage
+
+  // Atualizar indicador de turno
+  updateTurnIndicator()
+
+  // Atualizar botões de truco
+  updateActionButtons()
+}
+
+function updatePlayerHandsDisplay() {
+  // Limpar todos os containers de cartas
+  aiCardsContainer.innerHTML = ""
+  playerCardsContainer.innerHTML = ""
+  partnerCardsContainer.innerHTML = ""
+  ai1CardsContainer.innerHTML = ""
+  ai2CardsContainer.innerHTML = ""
+
+  gameState.players.forEach((player) => {
+    // Cartas da IA e do parceiro são escondidas, a menos que seja Mão de Ferro
+    const isHidden = !gameState.isMaoDeFerro && (player.isAI || (gameState.mode === "2v2" && player.id === "partner"))
+    let container = null
+
+    if (player.id === "player1") {
+      container = playerCardsContainer
+    } else if (player.id === "ai1") {
+      container = aiCardsContainer // Para 1v1
+      if (gameState.mode === "2v2") container = ai1CardsContainer
+    } else if (player.id === "partner") {
+      container = partnerCardsContainer
+    } else if (player.id === "ai2") {
+      container = ai2CardsContainer
+    }
+
+    if (container) {
+      player.cards.forEach((card) => {
+        const cardElement = document.createElement("div")
+        renderCard(card, cardElement, isHidden)
+        if (player.id === "player1" && !gameState.trucoState.waitingResponse && gameState.currentPlayerIndex === 0) {
+          cardElement.addEventListener("click", () => playCard(card, player.id))
+        } else {
+          cardElement.style.opacity = "0.5"
+          cardElement.style.cursor = "not-allowed"
+        }
+        container.appendChild(cardElement)
+      })
+    }
+  })
+}
+
+function updatePlayedCardsDisplay() {
+  playedCardsContainer.innerHTML = ""
+  gameState.playedCards.forEach((played) => {
+    const playedCardDiv = document.createElement("div")
+    playedCardDiv.className = "carta-jogada"
+
+    const playerLabel = document.createElement("span")
+    playerLabel.className = "player-label"
+    const player = gameState.players.find((p) => p.id === played.playerId)
+    playerLabel.textContent = player ? player.name : "Desconhecido"
+    playedCardDiv.appendChild(playerLabel)
+
+    const cardElement = document.createElement("div")
+    renderCard(played.card, cardElement, false)
+    playedCardDiv.appendChild(cardElement)
+
+    playedCardsContainer.appendChild(playedCardDiv)
+  })
+}
+
+function updateTurnIndicator() {
+  const currentPlayer = gameState.players[gameState.currentPlayerIndex]
+  if (gameState.trucoState.waitingResponse) {
+    turnIndicatorEl.textContent = "Aguardando resposta ao truco..."
+  } else if (currentPlayer) {
+    turnIndicatorEl.textContent = `Vez de: ${currentPlayer.name}`
+  }
+}
+
+function updateActionButtons() {
+  const currentPlayer = gameState.players[gameState.currentPlayerIndex]
+  const isPlayerTurn = currentPlayer && currentPlayer.id === "player1"
+
+  trucoBtn.disabled =
+    !isPlayerTurn ||
+    gameState.trucoState.waitingResponse ||
+    gameState.trucoState.value >= 12 ||
+    gameState.players[0].cards.length === 0 ||
+    gameState.isMaoDeFerro // Desabilitar truco na Mão de Ferro
+}
+
+function renderCard(card, element, isHidden) {
+  element.className = "card"
+  if (isHidden) {
+    element.classList.add("hidden")
+    element.innerHTML = `<div class="card-content"><div class="card-body">🂠</div></div>`
+  } else {
+    element.innerHTML = `
+            <div class="card-content">
+                <div class="top">
+                    <span class="card-value">${card.value}</span>
+                    <span class="card-suit" style="color: ${
+                      card.suit === "copas" || card.suit === "ouros" ? "red" : "black"
+                    }">${SUIT_SYMBOLS[card.suit]}</span>
+                </div>
+                <div class="card-body" style="color: ${
+                  card.suit === "copas" || card.suit === "ouros" ? "red" : "black"
+                }">${SUIT_SYMBOLS[card.suit]}</div>
+                <div class="bottom">
+                    <span class="card-value">${card.value}</span>
+                    <span class="card-suit" style="color: ${
+                      card.suit === "copas" || card.suit === "ouros" ? "red" : "black"
+                    }">${SUIT_SYMBOLS[card.suit]}</span>
+                </div>
+            </div>
+        `
+    if (card.isManilha) {
+      element.classList.add("manilha")
+    }
+  }
+}
+
+function playCard(card, playerId) {
+  if (gameState.trucoState.waitingResponse) return
+
+  const playerIndex = gameState.players.findIndex((p) => p.id === playerId)
+  if (playerIndex !== gameState.currentPlayerIndex) return // Não é a vez do jogador
+
+  // Tocar som de carta
+  cardPlaySound.play()
+
+  // Adicionar carta jogada
+  gameState.playedCards.push({ playerId, card })
+
+  // Remover carta da mão do jogador
+  gameState.players[playerIndex].cards = gameState.players[playerIndex].cards.filter((c) => c.id !== card.id)
+
+  // Próximo jogador
+  gameState.currentPlayerIndex = (gameState.currentPlayerIndex + 1) % gameState.players.length
+
+  updateGameDisplay()
+
+  // Verificar se todos jogaram na rodada
+  if (gameState.playedCards.length === gameState.players.length) {
+    setTimeout(() => {
+      const winnerIndex = determineRoundWinner()
+      processRoundEnd(winnerIndex)
+    }, 2000)
+  } else {
+    // Se o próximo jogador for IA, ela joga automaticamente
+    const nextPlayer = gameState.players[gameState.currentPlayerIndex]
+    if (nextPlayer && nextPlayer.isAI) {
+      setTimeout(aiPlayCard, 1500)
+    }
+  }
+}
+
+function aiPlayCard() {
+  const currentPlayerObj = gameState.players[gameState.currentPlayerIndex]
+  if (!currentPlayerObj || !currentPlayerObj.isAI || currentPlayerObj.cards.length === 0) return
+
+  // IA decide se pede truco antes de jogar (não na mão de ferro)
+  if (!gameState.isMaoDeFerro && aiShouldCallTruco(currentPlayerObj)) {
+    callTruco(currentPlayerObj.id)
+    return // IA chamou truco, não joga carta ainda
+  }
+
+  let cardToPlay = null
+  const opponentPlayedCard = gameState.playedCards.find(
+    (pc) => gameState.players.find((p) => p.id === pc.playerId).team !== currentPlayerObj.team,
+  )
+
+  if (gameState.isMaoDeFerro) {
+    // Na mão de ferro, joga a melhor carta
+    cardToPlay = currentPlayerObj.cards.reduce((prev, current) => (prev.power > current.power ? prev : current))
+  } else if (opponentPlayedCard) {
+    // Se o oponente já jogou, tentar ganhar a rodada
+    const winningCards = currentPlayerObj.cards.filter((c) => c.power > opponentPlayedCard.card.power)
+    if (winningCards.length > 0) {
+      // Joga a menor carta que ganha
+      cardToPlay = winningCards.reduce((prev, current) => (prev.power < current.power ? prev : current))
+    } else {
+      // Não tem carta para ganhar, joga a menor para "queimar"
+      cardToPlay = currentPlayerObj.cards.reduce((prev, current) => (prev.power < current.power ? prev : current))
+    }
+  } else {
+    // Se é a primeira carta da rodada para a IA
+    // Joga a menor carta para guardar as melhores, a menos que tenha uma manilha muito forte
+    const weakestCard = currentPlayerObj.cards.reduce((prev, current) => (prev.power < current.power ? prev : current))
+    const strongestCard = currentPlayerObj.cards.reduce((prev, current) =>
+      prev.power > current.power ? prev : current,
+    )
+
+    if (strongestCard.isManilha && strongestCard.power > 13 && Math.random() < 0.3) {
+      // 30% de chance de jogar uma manilha forte de primeira para intimidar
+      cardToPlay = strongestCard
+    } else {
+      cardToPlay = weakestCard
+    }
+  }
+
+  setTimeout(() => {
+    playCard(cardToPlay, currentPlayerObj.id)
+  }, 1000)
+}
+
+function determineRoundWinner() {
+  let bestCardPower = -1
+  let winnerPlayerIndex = -1
+  let winningTeam = -1
+  let tiedPlayers = []
+
+  // Encontrar a carta de maior valor na mesa
+  gameState.playedCards.forEach((played, index) => {
+    if (played.card.power > bestCardPower) {
+      bestCardPower = played.card.power
+      winnerPlayerIndex = gameState.players.findIndex((p) => p.id === played.playerId)
+      winningTeam = gameState.players[winnerPlayerIndex].team
+      tiedPlayers = [winnerPlayerIndex] // Resetar empates
+    } else if (played.card.power === bestCardPower) {
+      // Se houver empate de valor, adicionar ao grupo de empates
+      tiedPlayers.push(gameState.players.findIndex((p) => p.id === played.playerId))
+    }
+  })
+
+  // Lidar com empates
+  if (tiedPlayers.length > 1) {
+    // Verificar se os jogadores empatados são do mesmo time
+    const firstTiedPlayerTeam = gameState.players[tiedPlayers[0]].team
+    const allTiedPlayersSameTeam = tiedPlayers.every((idx) => gameState.players[idx].team === firstTiedPlayerTeam)
+
+    if (allTiedPlayersSameTeam) {
+      // Se todos os empatados são do mesmo time, esse time ganha a rodada
+      return tiedPlayers[0] // Retorna o índice do primeiro jogador empatado
+    } else {
+      // Se há empate entre times diferentes, a rodada é empatada
+      return -1 // Indica empate na rodada
+    }
+  }
+
+  return winnerPlayerIndex
+}
+
+function processRoundEnd(winnerIndex) {
+  let roundWinnerTeam = null
+  if (winnerIndex !== -1) {
+    roundWinnerTeam = gameState.players[winnerIndex].team
+  }
+
+  if (roundWinnerTeam === 1) {
+    gameState.roundWins.team1++
+    gameState.gameMessage = `${gameState.players[winnerIndex].name} ganhou a rodada!`
+  } else if (roundWinnerTeam === 2) {
+    gameState.roundWins.team2++
+    gameState.gameMessage = `${gameState.players[winnerIndex].name} ganhou a rodada!`
+  } else {
+    // Empate na rodada
+    gameState.gameMessage = "Rodada empatada!"
+  }
+
+  updateGameDisplay()
+
+  // Verificar se alguém ganhou a mão (melhor de 3)
+  if (gameState.roundWins.team1 >= 2 || gameState.roundWins.team2 >= 2 || gameState.roundNumber === 3) {
+    setTimeout(() => {
+      endHand()
+    }, 2000)
+  } else {
+    // Próxima rodada
+    setTimeout(() => {
+      // Quem ganhou a rodada começa a próxima, se houve vencedor. Senão, quem começou a mão continua.
+      const nextRoundStarterIndex = winnerIndex !== -1 ? winnerIndex : gameState.roundStartPlayerIndex
+      startNextRound(nextRoundStarterIndex)
+    }, 2000)
+  }
+}
+
+function startNextRound(startPlayerIndex) {
+  gameState.playedCards = []
+  gameState.roundNumber++
+  gameState.currentPlayerIndex = startPlayerIndex
+  gameState.roundStartPlayerIndex = startPlayerIndex // Atualiza quem começa a rodada
+  gameState.gameMessage = "Próxima rodada!"
+
+  updateGameDisplay()
+
+  // Se o jogador que vai começar for IA, ela joga
+  const currentPlayerObj = gameState.players[gameState.currentPlayerIndex]
+  if (currentPlayerObj && currentPlayerObj.isAI) {
+    setTimeout(aiPlayCard, 1500)
+  }
+}
+
+function endHand() {
+  let handWinnerTeam = null
+  const pointsToAdd = gameState.trucoState.value
+
+  if (gameState.roundWins.team1 > gameState.roundWins.team2) {
+    handWinnerTeam = 1
+  } else if (gameState.roundWins.team2 > gameState.roundWins.team1) {
+    handWinnerTeam = 2
+  } else {
+    // Empate na mão (ex: 1-1-1 ou 0-0-0)
+    // No truco paulista, se a mão empata, o ponto vai para quem fez a primeira rodada.
+    // Se a primeira rodada empatou, o ponto vai para quem fez a segunda.
+    // Se todas empataram, a mão é nula (ninguém ganha ponto).
+    // Para simplificar, se a mão empata, o ponto vai para o time que começou a mão.
+    handWinnerTeam = gameState.players[gameState.handStartPlayerIndex].team
+    gameState.gameMessage = "Mão empatada! Ponto para o time que começou a mão."
+  }
+
+  if (handWinnerTeam === 1) {
+    gameState.gameScore.team1 += pointsToAdd
+    gameState.gameMessage = `Seu time ganhou a mão! +${pointsToAdd} pontos`
+    winSound.play()
+  } else {
+    gameState.gameScore.team2 += pointsToAdd
+    gameState.gameMessage = `Time da Máquina ganhou a mão! +${pointsToAdd} pontos`
+    loseSound.play()
+  }
+
+  updateGameDisplay()
+
+  // Verificar fim de jogo
+  if (gameState.gameScore.team1 >= 12 || gameState.gameScore.team2 >= 12) {
+    setTimeout(() => {
+      const winnerMessage =
+        gameState.gameScore.team1 >= 12 ? "🎉 PARABÉNS! Seu time venceu o jogo!" : "💀 A Máquina venceu o jogo!"
+      showResultOverlay(winnerMessage, "Fim de Jogo!", true)
+    }, 2000)
+  } else {
+    setTimeout(startNewHand, 3000)
+  }
+}
+
+function callTruco(callerId) {
+  if (gameState.trucoState.waitingResponse || gameState.trucoState.value >= 12 || gameState.isMaoDeFerro) return
+
+  trucoSound.play()
+
+  const currentTrucoValue = gameState.trucoState.value
+  let nextValue = 0
+  if (currentTrucoValue === 1) nextValue = 3
+  else if (currentTrucoValue === 3) nextValue = 6
+  else if (currentTrucoValue === 6) nextValue = 9
+  else if (currentTrucoValue === 9) nextValue = 12
+
+  gameState.trucoState = {
+    called: true,
+    callerId: callerId,
+    value: nextValue,
+    waitingResponse: true,
+  }
+
+  const trucoName = nextValue === 3 ? "Truco" : nextValue === 6 ? "Seis" : nextValue === 9 ? "Nove" : "Doze"
+  const callerName = gameState.players.find((p) => p.id === callerId).name
+
+  gameState.gameMessage = `${callerName} chamou ${trucoName}!`
+  updateGameDisplay()
+
+  if (callerId === "player1") {
+    showTrucoOverlay(trucoName, `Você chamou ${trucoName}!`)
+  } else {
+    showTrucoOverlay(trucoName, `${callerName} chamou ${trucoName}!`)
+    // IA responde automaticamente
+    setTimeout(() => {
+      const aiDecision = aiDecideTrucoResponse()
+      respondTruco(aiDecision)
+    }, 2000)
+  }
+}
+
+function showTrucoOverlay(title, info) {
+  trucoTitleEl.textContent = `${title.toUpperCase()}! 🔥`
+  trucoInfoEl.textContent = info
+  trucoOverlay.style.display = "flex"
+
+  // Ajustar botões do overlay
+  const btnAceitar = trucoOverlay.querySelector(".btn-aceitar")
+  const btnAumentar = trucoOverlay.querySelector(".btn-aumentar")
+  const btnDesistir = trucoOverlay.querySelector(".btn-desistir")
+
+  btnAceitar.textContent = `Aceitar (${gameState.trucoState.value} pontos)`
+  btnAumentar.textContent = `Aumentar para ${gameState.trucoState.value + 3}!`
+  if (gameState.trucoState.value === 12) {
+    btnAumentar.style.display = "none" // Não pode aumentar de 12
+  } else {
+    btnAumentar.style.display = "inline-block"
+  }
+}
+
+function respondTruco(response) {
+  trucoOverlay.style.display = "none"
+  gameState.trucoState.waitingResponse = false
+
+  if (response === "accept") {
+    gameState.gameMessage = `${gameState.players.find((p) => p.id === gameState.trucoState.callerId).name} aceitou!`
+  } else if (response === "raise") {
+    const nextValue = gameState.trucoState.value + 3
+    gameState.trucoState.value = nextValue > 12 ? 12 : nextValue
+    gameState.trucoState.callerId = gameState.players[gameState.currentPlayerIndex].id // Quem retrucou
+    gameState.trucoState.waitingResponse = true // Aguarda nova resposta
+    gameState.gameMessage = `${gameState.players[gameState.currentPlayerIndex].name} aumentou para ${gameState.trucoState.value}!`
+
+    // Se o jogador aumentou, a IA responde
+    if (gameState.players[gameState.currentPlayerIndex].isAI) {
+      setTimeout(() => {
+        const aiDecision = aiDecideTrucoResponse()
+        respondTruco(aiDecision)
+      }, 2000)
+    } else {
+      // Se o jogador aumentou, a IA que chamou truco agora responde
+      const originalCallerIndex = gameState.players.findIndex((p) => p.id === gameState.trucoState.callerId)
+      gameState.currentPlayerIndex = originalCallerIndex // Volta para o original caller para ele responder
+      updateGameDisplay()
+      setTimeout(() => {
+        const aiDecision = aiDecideTrucoResponse()
+        respondTruco(aiDecision)
+      }, 2000)
+    }
+  } else if (response === "fold") {
+    const points = gameState.trucoState.value - 1 // Ponto para quem pediu truco
+    const winnerTeam = gameState.players.find((p) => p.id === gameState.trucoState.callerId).team
+    if (winnerTeam === 1) {
+      gameState.gameScore.team1 += points
+    } else {
+      gameState.gameScore.team2 += points
+    }
+    gameState.gameMessage = `${gameState.players.find((p) => p.id === gameState.trucoState.callerId).name} ganhou ${points} pontos porque o outro time correu!`
+    winSound.play() // Som de vitória para quem ganhou os pontos
+
+    setTimeout(() => {
+      if (gameState.gameScore.team1 >= 12 || gameState.gameScore.team2 >= 12) {
+        const winnerMessage =
+          gameState.gameScore.team1 >= 12 ? "🎉 PARABÉNS! Seu time venceu o jogo!" : "💀 A Máquina venceu o jogo!"
+        showResultOverlay(winnerMessage, "Fim de Jogo!", true)
+      } else {
+        startNewHand()
+      }
+    }, 2000)
+  }
+  updateGameDisplay()
+
+  // Se não está aguardando resposta, o jogo continua
+  if (!gameState.trucoState.waitingResponse && response !== "fold") {
+    // Se o truco foi aceito, o jogo continua de onde parou
+    const playerToPlayAfterTruco = gameState.players[gameState.currentPlayerIndex]
+    if (playerToPlayAfterTruco && playerToPlayAfterTruco.isAI) {
+      setTimeout(aiPlayCard, 1500)
+    }
+  }
+}
+
+function aiDecideTrucoResponse() {
+  const aiPlayer = gameState.players[gameState.currentPlayerIndex]
+  const aiTeam = aiPlayer.team
+  const opponentTeam = aiTeam === 1 ? 2 : 1
+
+  // Avaliar força das cartas da IA
+  const aiCardsPower = aiPlayer.cards.reduce((sum, card) => sum + card.power, 0)
+  const hasManilha = aiPlayer.cards.some((card) => card.isManilha)
+
+  let acceptChance = 0.5 // Base
+  if (gameState.difficulty === "iniciante") {
+    acceptChance = 0.7 // Mais propenso a aceitar
+  } else if (gameState.difficulty === "amador") {
+    acceptChance = 0.5
+  } else if (gameState.difficulty === "dificil") {
+    acceptChance = 0.3 // Menos propenso a aceitar, mais propenso a aumentar ou correr
+  }
+
+  // Se tiver manilha forte, mais chance de aceitar/aumentar
+  if (hasManilha && aiCardsPower > 25) {
+    acceptChance += 0.2
+  }
+
+  // Se o valor do truco já está alto, mais chance de correr
+  if (gameState.trucoState.value >= 9) {
+    acceptChance -= 0.3
+  }
+
+  // Decisão final
+  if (Math.random() < acceptChance) {
+    return "accept"
+  } else {
+    // Se não aceitar, decide entre aumentar ou correr
+    const raiseChance = gameState.difficulty === "dificil" ? 0.6 : gameState.difficulty === "amador" ? 0.3 : 0.1
+    if (Math.random() < raiseChance && gameState.trucoState.value < 12) {
+      return "raise"
+    } else {
+      return "fold"
+    }
+  }
+}
+
+function aiShouldCallTruco(aiPlayer) {
+  if (gameState.trucoState.called || gameState.trucoState.value >= 12 || gameState.isMaoDeFerro) return false
+
+  const aiCardsPower = aiPlayer.cards.reduce((sum, card) => sum + card.power, 0)
+  const hasManilha = aiPlayer.cards.some((card) => card.isManilha)
+
+  let callChance = 0
+  if (gameState.difficulty === "iniciante") {
+    callChance = 0.1 // Raramente chama
+  } else if (gameState.difficulty === "amador") {
+    callChance = 0.2
+  } else if (gameState.difficulty === "dificil") {
+    callChance = 0.4 // Mais propenso a chamar
+  }
+
+  // Se tiver manilha ou cartas muito boas, aumenta a chance
+  if (hasManilha && aiCardsPower > 28) {
+    callChance += 0.3
+  } else if (aiCardsPower > 25) {
+    callChance += 0.1
+  }
+
+  return Math.random() < callChance
+}
+
+function showResultOverlay(title, info, isGameOver = false) {
+  resultTitleEl.textContent = title
+  resultInfoEl.textContent = info
+  resultOverlay.style.display = "flex"
+
+  if (isGameOver) {
+    document.getElementById("new-game").style.display = "block"
+    document.getElementById("result-overlay").querySelector(".btn-ok").style.display = "none"
+    endMessageEl.textContent = title
+    finalScoreEl.innerHTML = `
+        <p>Seu Time: ${gameState.gameScore.team1} pontos</p>
+        <p>Time da Máquina: ${gameState.gameScore.team2} pontos</p>
+    `
+    showScreen("end")
+  } else {
+    document.getElementById("new-game").style.display = "none"
+    document.getElementById("result-overlay").querySelector(".btn-ok").style.display = "inline-block"
+  }
+}
+
+function closeResultOverlay() {
+  resultOverlay.style.display = "none"
+  // Se não for fim de jogo, o jogo continua
+  if (gameState.phase === "playing") {
+    // Se o próximo jogador for IA, ela joga
+    const currentPlayerObj = gameState.players[gameState.currentPlayerIndex]
+    if (currentPlayerObj && currentPlayerObj.isAI) {
+      setTimeout(aiPlayCard, 1500)
+    }
+  }
+}
